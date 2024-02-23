@@ -780,11 +780,11 @@ static bool RF_cmdDispatchTime(uint32_t* dispatchTimeClockTicks, bool conflict, 
                                       + pCmd->pClient->clientConfig.nPhySwitchingDurationMargin;
             }
             else
-            {
-                nTotalDuration = pCmd->pClient->clientConfig.nPowerUpDuration
-                                      + pCmd->pClient->clientConfig.nPowerUpDurationMargin
-                                      + (RF_RAT_COMPENSATION_TIME_US * RF_ratModule.numActiveChannels);
-            }
+                {
+                    nTotalDuration = pCmd->pClient->clientConfig.nPowerUpDuration
+                                    + pCmd->pClient->clientConfig.nPowerUpDurationMargin
+                                    + (RF_RAT_COMPENSATION_TIME_US * RF_ratModule.numActiveChannels);
+                }
 
             /* Calculate the remained time until this absolute event. The calculation takes
                into account the minimum power cycle time. */
@@ -1786,7 +1786,7 @@ void RF_powerConstraintRelease(RF_PowerConstraintSrc src)
     /* Check if all constraints are clear. */
     if (RF_core.status != RF_CoreStatusPoweringDown &&
 	!(RF_powerConstraint & RF_PowerConstraintCmdQ)) {
-	/* Initiate power down if the above criterion is met.
+        /* Initiate power down if the above criterion is met.
            The RAT timer though might will prevent us to proceed. */
         SwiP_or(&RF_swiFsmObj, RF_FsmEventPowerDown);
     }
@@ -2105,7 +2105,7 @@ static void RF_dispatchNextCmd(void)
            doDispatchNow = true;
        }
        /* Or the current client wants to execute in the foreground on top of a background command */
-       else if (RF_cmdQ.pCurrCmdBg 
+       else if (RF_cmdQ.pCurrCmdBg
                 && (RF_cmdQ.pCurrCmdBg->pClient == pNextCmd->pClient)
                 && (pNextCmd->flags & RF_CMD_FG_CMD_FLAG))
        {
@@ -2130,7 +2130,7 @@ static void RF_dispatchNextCmd(void)
         SwiP_or(&RF_swiFsmObj, RF_FsmEventLastCommandDone);
     }
 
-    /* 
+    /*
      * Calculate the timestamp of the next command in the command queue.
      * `conflict` parameter (here opposite of doDistpatch) implicitly used to determine margin needed to execute incoming command.
      */
@@ -2182,7 +2182,7 @@ static void RF_dispatchNextCmd(void)
             case RF_ExecuteActionNone:
             default:
             {
-                /* 
+                /*
                  * Ignore command if conflict, and pick it up after current finishes.
                  * If no conflict, dispatch.
                  */
@@ -2235,7 +2235,7 @@ static void RF_dispatchNextCmd(void)
 
                 /* Invoke global callback to indicate start of command chain */
                 RF_invokeGlobalCallback(RF_GlobalEventCmdStart, (void*)pNextCmd);
-                
+
                 /* Send the radio operation to the RF core. */
                 RFCDoorbellSendTo((uint32_t)pOp);
 
@@ -3493,7 +3493,7 @@ static void RF_fsmActiveState(RF_Object *pObj, RF_FsmEvent e)
             pErrCb(RF_currClient, RF_ERROR_CMDFS_SYNTH_PROG, RF_EventError);
         }
 
-        /* Only compute PHY switching time if rtcValTmp1 is not zero (was initialized) */
+        /* Only compute PHY switching time if RF_rtcBeginSequence is not zero (was initialized) */
         if (RF_rtcBeginSequence)
         {
             /* Record the timestamp for switching time measurement. */
@@ -4050,7 +4050,7 @@ static uint8_t RF_searchAndReplacePAOverride(uint32_t* pOverride, uint32_t overr
         }
         else
         {
-            /* Replace the default PA gain with the new value. */
+            /* Replace the default or Sub-1GHz PA gain with the new value. */
             pOverride[paOffset] = TX_STD_POWER_OVERRIDE(newValue);
         }
     }
@@ -4544,7 +4544,6 @@ RF_Handle RF_open(RF_Object *pObj, RF_Mode* pRfMode, RF_RadioSetup* pRadioSetup,
  */
 void RF_close(RF_Handle h)
 {
-    /* Assert */
     DebugP_assert(h != NULL);
 
     /* If there is at least one active client */
@@ -5709,7 +5708,7 @@ RF_TxPowerTable_Value RF_getTxPower(RF_Handle handle)
     /* Decode if High Gain PA is available. */
     bool tx20FeatureAvailable = RF_decodeOverridePointers(handle->clientConfig.pRadioSetup, &pTxPower, &pRegOverride, &pRegOverrideTxStd, &pRegOverrideTx20);
 
-    /* Continue the search for the poper value if the High PA is used. */
+    /* Continue the search for the proper value if the High PA is used. */
     if (*pTxPower == RF_TX20_ENABLED)
     {
         /* Local variable. */
@@ -5820,10 +5819,10 @@ RF_TxPowerTable_Value RF_TxPowerTable_findValue(RF_TxPowerTable_Entry table[], i
  *  ======== RF_enableHPOSCTemperatureCompensation ========
  * Initializes the temperature compensation monitoring (SW TCXO)
  * This function enables RF synthesizer temperature compensation
- * It is intended for use on the SIP or BAW devices where compensation 
+ * It is intended for use on the SIP or BAW devices where compensation
  * coefficients are available inside the chip.
- * 
- * The name of the function is a misnomer, as it does not only apply to 
+ *
+ * The name of the function is a misnomer, as it does not only apply to
  * HPOSC (BAW) configuration, but will generically enable SW TCXO.
  */
 void RF_enableHPOSCTemperatureCompensation(void)
@@ -5833,7 +5832,7 @@ void RF_enableHPOSCTemperatureCompensation(void)
     Temperature_init();
 
     int16_t currentTemperature = Temperature_getTemperature();
-    
+
     status = Temperature_registerNotifyRange(&RF_hposcRfCompNotifyObj,
                                                 currentTemperature + RF_TEMP_LIMIT_3_DEGREES_CELSIUS,
                                                 currentTemperature - RF_TEMP_LIMIT_3_DEGREES_CELSIUS,

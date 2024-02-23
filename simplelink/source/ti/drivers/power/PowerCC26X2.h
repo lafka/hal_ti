@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2020, Texas Instruments Incorporated
+ * Copyright (c) 2017-2023, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,7 +22,7 @@
  * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
  * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
  * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQueueNTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
  * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
  * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
@@ -63,31 +63,31 @@ extern "C" {
 #endif
 
 /*! The latency to reserve for resume from STANDBY (usec). */
-#define PowerCC26X2_RESUMETIMESTANDBY  750
+#define PowerCC26X2_RESUMETIMESTANDBY 750
 
 /*! The total latency to reserve for entry to and exit from STANDBY (usec). */
-#define PowerCC26X2_TOTALTIMESTANDBY   1000
+#define PowerCC26X2_TOTALTIMESTANDBY 1000
 
 /*! The initial delay when waking from STANDBY (usec). */
-#define PowerCC26X2_WAKEDELAYSTANDBY    240
+#define PowerCC26X2_WAKEDELAYSTANDBY 240
 
 /*! The initial wait time (usec) before checking if RCOSC_LF is stable. */
 #define PowerCC26X2_INITIALWAITRCOSC_LF 1000
 
 /*! The retry wait time (usec) when checking to see if RCOSC_LF is stable. */
-#define PowerCC26X2_RETRYWAITRCOSC_LF   1000
+#define PowerCC26X2_RETRYWAITRCOSC_LF 1000
 
 /*! The initial wait time (usec) before checking if XOSC_HF is stable. */
-#define PowerCC26X2_INITIALWAITXOSC_HF  50
+#define PowerCC26X2_INITIALWAITXOSC_HF 50
 
 /*! The retry wait time (usec) when checking to see if XOSC_HF is stable. */
-#define PowerCC26X2_RETRYWAITXOSC_HF    50
+#define PowerCC26X2_RETRYWAITXOSC_HF 50
 
 /*! The initial wait time (usec) before checking if XOSC_LF is stable. */
-#define PowerCC26X2_INITIALWAITXOSC_LF  10000
+#define PowerCC26X2_INITIALWAITXOSC_LF 10000
 
 /*! The retry wait time (usec) when checking to see if XOSC_LF is stable. */
-#define PowerCC26X2_RETRYWAITXOSC_LF    5000
+#define PowerCC26X2_RETRYWAITXOSC_LF 5000
 
 #define PowerCC26X2_PERIPH_PKA          PowerCC26XX_NUMRESOURCES /*!< Resource ID: PKA Module */
 
@@ -110,14 +110,15 @@ extern "C" {
 /*
  *  Calibration stages
  */
-#define PowerCC26X2_SETUP_CALIBRATE     1
-#define PowerCC26X2_INITIATE_CALIBRATE  2
-#define PowerCC26X2_DO_CALIBRATE        3
+#define PowerCC26X2_SETUP_CALIBRATE    1
+#define PowerCC26X2_INITIATE_CALIBRATE 2
+#define PowerCC26X2_DO_CALIBRATE       3
 /* \endcond */
 
 
 /*! @brief Global configuration structure */
-typedef struct {
+typedef struct
+{
     /*!
      *  @brief The Power Policy's initialization function
      *
@@ -158,7 +159,7 @@ typedef struct {
      *  To disable RCOSC calibration, the function PowerCC26X2_noCalibrate()
      *  should be specified.
      */
-    bool (*calibrateFxn)(unsigned int);
+    bool (*calibrateFxn)(unsigned int calibrationStage);
     /*!
      *  @brief Boolean specifying if the Power Policy function is enabled
      *
@@ -196,7 +197,7 @@ typedef struct {
      *  If TCXO is configured to be enabled in CCFG this function will
      *  enable or disable the TCXO by asserting or deasserting power to it.
      */
-    void (*enableTCXOFxn)(bool);
+    void (*enableTCXOFxn)(bool arg);
 } PowerCC26X2_Config;
 
 /*!
@@ -205,7 +206,8 @@ typedef struct {
  *  Power manager state structure. The application must not access any members
  *  of this structure!
  */
-typedef struct {
+typedef struct
+{
     List_List notifyList;           /*!< Event notification list */
     uint32_t constraintMask;        /*!< Aggregate constraints mask */
     ClockP_Struct clockObj;         /*!< Clock object for scheduling wakeups */
@@ -235,9 +237,9 @@ typedef struct {
     /*!< Array to maintain constraint reference counts */
     uint8_t resourceCounts[PowerCC26X2_NUMRESOURCES];
     /*!< Array to maintain resource dependency reference counts */
-    unsigned int (*resourceHandlers[3])(unsigned int);
+    unsigned int (*resourceHandlers[3])(unsigned int arg);
     /*!< Array of special dependency handler functions */
-    Power_PolicyFxn policyFxn;   /*!< The Power policy function */
+    Power_PolicyFxn policyFxn;               /*!< The Power policy function */
 } PowerCC26X2_ModuleState;
 
 /*!
@@ -248,7 +250,7 @@ typedef struct {
  *
  *  It only needs to be called once after the system boots.
  *
- *  This function should only be called when SCLK_LF is configured to be drived
+ *  This function should only be called when SCLK_LF is configured to be derived
  *  from HPOSC.
  */
 void PowerCC26X2_enableHposcRtcCompensation(void);
