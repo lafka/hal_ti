@@ -41,6 +41,7 @@
 #include <ti/drivers/power/PowerCC26XX.h>
 #include <ti/drivers/power/PowerCC26X2.h>
 #include <ti/drivers/power/PowerCC26X2_helpers.h>
+#include <ti/devices/cc13x2_cc26x2/inc/hw_memmap_common.h>
 
 #include <ti/devices/DeviceFamily.h>
 #include DeviceFamily_constructPath(inc/hw_aux_evctl.h)
