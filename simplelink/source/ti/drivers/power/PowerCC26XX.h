@@ -56,6 +56,8 @@
 #include <ti/drivers/dpl/ClockP.h>
 #include <ti/drivers/Power.h>
 
+#include <ti/devices/DeviceFamily.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -91,63 +93,122 @@ typedef uint8_t PowerCC26XX_Resource; /* Resource identifier */
 /*! The retry wait time (usec) when checking to see if XOSC_LF is stable. */
 #define PowerCC26XX_RETRYWAITXOSC_LF 5000
 
-/* resource IDs */
+/*
+ * Resource IDs
+ */
+/*! Resource ID: General Purpose Timer 0 */
 #define PowerCC26XX_PERIPH_GPT0 0
-/*!< Resource ID: General Purpose Timer 0 */
 
+/*! Resource ID: General Purpose Timer 1 */
 #define PowerCC26XX_PERIPH_GPT1 1
-/*!< Resource ID: General Purpose Timer 1 */
 
+/*! Resource ID: General Purpose Timer 2 */
 #define PowerCC26XX_PERIPH_GPT2 2
-/*!< Resource ID: General Purpose Timer 2 */
 
+/*! Resource ID: General Purpose Timer 3 */
 #define PowerCC26XX_PERIPH_GPT3 3
-/*!< Resource ID: General Purpose Timer 3 */
 
+/*! Resource ID: Synchronous Serial Interface 0 */
 #define PowerCC26XX_PERIPH_SSI0 4
-/*!< Resource ID: Synchronous Serial Interface 0 */
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+    /*! Resource ID: SPI0 */
+    #define PowerCC26XX_PERIPH_SPI0 PowerCC26XX_PERIPH_SSI0
+#endif
 
-#define PowerCC26XX_PERIPH_SSI1    5
-/*!< Resource ID: Synchronous Serial Interface 1 */
+/*! Resource ID: UART 0 */
+#define PowerCC26XX_PERIPH_UART0 5
 
-#define PowerCC26XX_PERIPH_UART0   6  /*!< Resource ID: UART 0 */
+/*! Resource ID: I2C 0 */
+#define PowerCC26XX_PERIPH_I2C0 6
 
-#define PowerCC26XX_PERIPH_I2C0    7  /*!< Resource ID: I2C 0 */
+/*! Resource ID: True Random Number Generator */
+#define PowerCC26XX_PERIPH_TRNG 7
 
-#define PowerCC26XX_PERIPH_TRNG    8
-/*!< Resource ID: True Random Number Generator */
+/*! Resource ID: General Purpose I/Os */
+#define PowerCC26XX_PERIPH_GPIO 8
 
-#define PowerCC26XX_PERIPH_GPIO    9  /*!< Resource ID: General Purpose I/Os */
+/*! Resource ID: uDMA Controller */
+#define PowerCC26XX_PERIPH_UDMA 9
 
-#define PowerCC26XX_PERIPH_UDMA    10 /*!< Resource ID: uDMA Controller */
+/*! Resource ID: AES Security Module */
+#define PowerCC26XX_PERIPH_CRYPTO 10
 
-#define PowerCC26XX_PERIPH_CRYPTO  11 /*!< Resource ID: AES Security Module */
+/*! Resource ID: I2S */
+#define PowerCC26XX_PERIPH_I2S 11
 
-#define PowerCC26XX_PERIPH_I2S     12 /*!< Resource ID: I2S */
+/*! Resource ID: RF Core Module */
+#define PowerCC26XX_PERIPH_RFCORE 12
 
-#define PowerCC26XX_PERIPH_RFCORE  13 /*!< Resource ID: RF Core Module */
+/*! Resource ID: High Frequency Crystal Oscillator */
+#define PowerCC26XX_XOSC_HF 13
 
-#define PowerCC26XX_XOSC_HF        14
-/*!< Resource ID: High Frequency Crystal Oscillator */
+/*! Resource ID: Peripheral Power Domain */
+#define PowerCC26XX_DOMAIN_PERIPH 14
 
-#define PowerCC26XX_DOMAIN_PERIPH  15
-/*!< Resource ID: Peripheral Power Domain */
+/*! Resource ID: Serial Power Domain */
+#define PowerCC26XX_DOMAIN_SERIAL 15
 
-#define PowerCC26XX_DOMAIN_SERIAL  16
-/*!< Resource ID: Serial Power Domain */
+/*! Resource ID: RF Core Power Domain */
+#define PowerCC26XX_DOMAIN_RFCORE 16
 
-#define PowerCC26XX_DOMAIN_RFCORE  17
-/*!< Resource ID: RF Core Power Domain */
+/*! Resource ID: System Bus Power Domain */
+#define PowerCC26XX_DOMAIN_SYSBUS 17
 
-#define PowerCC26XX_DOMAIN_SYSBUS  18
-/*!< Resource ID: System Bus Power Domain */
+/* The PKA and UART1 peripherals are not available on CC13X1 and CC26X1 devices */
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X2_CC26X2 || \
+     DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+
+    /*! Resource ID: PKA Module */
+    #define PowerCC26XX_PERIPH_PKA 18
+
+    /*! Resource ID: UART1 */
+    #define PowerCC26XX_PERIPH_UART1 19
+
+    /*! Resource ID: Synchronous Serial Interface 1 */
+    #define PowerCC26XX_PERIPH_SSI1 20
+    #if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+        /*! Resource ID: SPI1 */
+        #define PowerCC26XX_PERIPH_SPI1 PowerCC26XX_PERIPH_SSI1
+    #endif
+#endif
+
+/* The peripherals below are only available on CC13X4 and CC26X4 devices */
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+
+    /*! Resource ID: UART2 */
+    #define PowerCC26XX_PERIPH_UART2 21
+
+    /*! Resource ID: UART3 */
+    #define PowerCC26XX_PERIPH_UART3 22
+
+    /*! Resource ID: SPI2 */
+    #define PowerCC26XX_PERIPH_SPI2 23
+    /*! Included for compatibilty. Please use \ref PowerCC26XX_PERIPH_SPI2 */
+    #define PowerCC26XX_PERIPH_SSI2 PowerCC26XX_PERIPH_SPI2
+
+    /*! Resource ID: SPI3 */
+    #define PowerCC26XX_PERIPH_SPI3 24
+    /*! Included for compatibility. Please use \ref PowerCC26XX_PERIPH_SPI3 */
+    #define PowerCC26XX_PERIPH_SSI3 PowerCC26XX_PERIPH_SPI3
+
+    /*! Resource ID: I2C1 */
+    #define PowerCC26XX_PERIPH_I2C1 25
+#endif
 
 /* \cond */
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X0_CC26X0)
     #define PowerCC26XX_NUMRESOURCES 19 /* Number of resources in database */
+#elif (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X1_CC26X1)
+    #define PowerCC26XX_NUMRESOURCES 19 /* Number of resources in database */
+#elif (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X2_CC26X2)
+    #define PowerCC26XX_NUMRESOURCES 21 /* Number of resources in database */
+#elif (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+    #define PowerCC26XX_NUMRESOURCES 26 /* Number of resources in database */
+#endif
 /* \endcond */
 
 /* \cond */
-/* resource record bitmasks */
+/* Resource record bitmasks */
 #define PowerCC26XX_PERIPH     0x80 /* resource is a peripheral */
 #define PowerCC26XX_SPECIAL    0x40 /* resource requires special handler */
 #define PowerCC26XX_DOMAIN     0x00 /* resource is a domain */
@@ -179,8 +240,7 @@ typedef uint8_t PowerCC26XX_Resource; /* Resource identifier */
 /*! Constraint: Flash memory needs to enabled during IDLE */
 #define PowerCC26XX_NEED_FLASH_IN_IDLE 4
 
-#define PowerCC26XX_SWITCH_XOSC_HF_MANUALLY 5
-/*!< Constraint: Prevent power driver from starting an RTOS clock and
+/*! Constraint: Prevent power driver from starting an RTOS clock and
  *  automatically switching to the XOSC_HF when it is ready. The power
  *  driver will turn on the XOSC_HF and return control to the application.
  *  The application must poll the status of the XOSC_HF and make sure that it
@@ -317,7 +377,7 @@ typedef uint8_t PowerCC26XX_Resource; /* Resource identifier */
  *  }
  *  @endcode
  */
-
+#define PowerCC26XX_JTAG_PD_TURNED_ON 0x40
 
 /* \cond */
 #define PowerCC26XX_NUMEVENTS 6 /* Number of events supported */

@@ -68,6 +68,7 @@ RF User Guide</b></a>.
 @li @ref rf_scheduling "Preemptive scheduler for RF operations" of different RF driver instances
 @li Convenient @ref rf_rat "Access to the radio timer" (RAT)
 @li @ref rf_tx_power "Programming the TX power level"
+@li @ref rf_temperature_compensation "Temperature Compensation"
 
 @anchor rf_setup_and_configuration
 Setup and configuration
@@ -506,9 +507,12 @@ The RAT may be used to capture a time stamp on an edge of a physical pin. This
 can be achieved with #RF_ratCapture().
 
 @code
-#include <ti/drivers/pin/PINCC26XX.h>
+#include <ti/devices/DeviceFamily.h>
+#include DeviceFamily_constructPath(driverlib/ioc.h)
+#include <ti/drivers/GPIO.h>
+#include <ti/drivers/gpio/GPIOCC26XX.h>
 // Map IO 26 to RFC_GPI0
-PINCC26XX_setMux(pinHandle, IOID_26, PINCC26XX_MUX_RFC_GPI0);
+GPIO_setMux(IOID_26, IOC_PORT_RFC_GPI0);
 
 RF_Handle rfDriver;
 RF_RatConfigCapture config;
@@ -556,8 +560,11 @@ static uint32_t pOverrides[] =
 }
 
 // Finally, route the intermediate doorbell signal to a physical pin.
-#include <ti/drivers/pin/PINCC26XX.h>
-PINCC26XX_setMux(pinHandle, IOID_17, PINCC26XX_MUX_RFC_GPO2);
+#include <ti/devices/DeviceFamily.h>
+#include DeviceFamily_constructPath(driverlib/ioc.h)
+#include <ti/drivers/GPIO.h>
+#include <ti/drivers/gpio/GPIOCC26XX.h>
+GPIO_setMux(IOID_17, IOC_PORT_RFC_GPO2);
 @endcode
 
 <hr>
@@ -971,6 +978,15 @@ extern "C" {
  */
 #define RF_TxPowerTable_DEFAULT_PA_ENTRY(bias, gain, boost, coefficient) \
         { .rawValue = ((bias) << 0) | ((gain) << 6) | ((boost) << 8) | ((coefficient) << 9), .paType = RF_TxPowerTable_DefaultPA }
+
+/**
+ * Creates a TX power table Sub1-GHz entry for the default PA.
+ *
+ * The values for \a bias, \a gain, \a boost, \a coefficient and \a gain2 are usually measured by Texas Instruments
+ * for a specific front-end configuration. They can then be obtained from SmartRFStudio or SysConfig.
+ */
+#define RF_TxPowerTable_CC13x4Sub1GHz_DEFAULT_PA_ENTRY(bias, gain, boost, coefficient, gain2) \
+        { .rawValue = ((bias) << 0) | ((gain) << 6) | ((boost) << 8) | ((coefficient) << 9) | ((gain2) << 16), .paType = RF_TxPowerTable_DefaultPA }
 
 /**
  * Creates a TX power table entry for the High-power PA.
@@ -1388,6 +1404,12 @@ typedef enum {
     RF_GlobalEventCoexControl    = (1 << 5),             ///< Change to coex configuration is requested
                                                          ///< The \a arg argument is pointer to at least 8-bit wide int with value 1=enable, or 0=disable
                                                          ///< Task/HWI context.
+
+    RF_GlobalEventTempNotifyFail  = (1 << 6),            ///< Registration of temperature notification was unsuccessful
+                                                         ///< (failure returned from temperature driver)
+                                                         ///< The \a arg argument is empty.
+                                                         ///< HWI context
+
 } RF_GlobalEvent;
 
 
@@ -1448,6 +1470,7 @@ struct RF_ObjectMultiMode{
         RF_RadioSetup*      pRadioSetup;                 ///< Pointer to the setup command to be executed at power up.
         uint32_t            nPhySwitchingDuration;       ///< Radio reconfiguration time to this client's phy and protocol.
         uint32_t            nPowerUpDuration;            ///< Radio power up time to be used to calculate future wake-up events.
+        uint32_t            nPowerUpDurationFs;          ///< Same as nPowerUpDuration, specifically when radio wakes up to execute an FS cmd.
         bool                bMeasurePowerUpDuration;     ///< Indicates if nPowerUpDuration holds a fix value or being measured and updated at every power up.
         bool                bUpdateSetup;                ///< Indicates if an analog configuration update should be performed at the next setup command execution.
         uint16_t            nPowerUpDurationMargin;      ///< Power up duration margin in us.
@@ -2621,8 +2644,12 @@ extern RF_TxPowerTable_Value RF_TxPowerTable_findValue(RF_TxPowerTable_Entry tab
 /**
  * @brief Enables temperature monitoring and temperature based drift compensation
  *
+ * @return #RF_StatSuccess if succesful or
+ *         #RF_StatInvalidParamsError if temperature notification fails
+ *          to register.
+ *
  */
-extern void RF_enableHPOSCTemperatureCompensation(void);
+extern RF_Stat RF_enableHPOSCTemperatureCompensation(void);
 
 #ifdef __cplusplus
 }

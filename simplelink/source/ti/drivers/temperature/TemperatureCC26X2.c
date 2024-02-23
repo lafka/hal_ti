@@ -414,7 +414,7 @@ void Temperature_init(void)
         HwiP_Params_init(&hwiParams);
         hwiParams.priority  = TemperatureCC26X2_config.intPriority;
         hwiParams.enableInt = true;
-        HwiP_construct(&batmonHwi, INT_BATMON_COMB, temperatureHwiFxn, NULL);
+        HwiP_construct(&batmonHwi, INT_BATMON_COMB, temperatureHwiFxn, &hwiParams);
 
         disableTempUpperLimit();
         disableTempLowerLimit();
@@ -427,6 +427,11 @@ void Temperature_init(void)
          * We use WU2 since WU0 is the RTC and WU1 is a pad (GPIO) event.
          */
         AONEventMcuWakeUpSet(AON_EVENT_MCU_WU2, AON_EVENT_BATMON_COMBINED);
+
+        /* Wait until first measurement is ready to prevent
+         * Temperature_getTemperature from returning an invalid value
+         */
+        while (AONBatMonNewTempMeasureReady() == false) {}
 
         isInitialized = true;
     }

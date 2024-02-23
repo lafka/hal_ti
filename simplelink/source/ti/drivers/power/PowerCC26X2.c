@@ -42,6 +42,7 @@
 
 #include <ti/drivers/Power.h>
 #include <ti/drivers/power/PowerCC26X2.h>
+#include <ti/drivers/power/PowerCC26X2_helpers.h>
 #include <ti/drivers/Temperature.h>
 
 /* driverlib header files */
@@ -52,12 +53,12 @@
 #include DeviceFamily_constructPath(inc/hw_aux_sysif.h)
 #include DeviceFamily_constructPath(inc/hw_aon_rtc.h)
 #include DeviceFamily_constructPath(inc/hw_memmap.h)
+#include DeviceFamily_constructPath(inc/hw_memmap_common.h)
 #include DeviceFamily_constructPath(inc/hw_ccfg.h)
 #include DeviceFamily_constructPath(inc/hw_rfc_pwr.h)
 #include DeviceFamily_constructPath(inc/hw_aon_pmctl.h)
 #include DeviceFamily_constructPath(inc/hw_fcfg1.h)
 #include DeviceFamily_constructPath(inc/hw_ints.h)
-#include DeviceFamily_constructPath(driverlib/sys_ctrl.h)
 #include DeviceFamily_constructPath(driverlib/pwr_ctrl.h)
 #include DeviceFamily_constructPath(driverlib/prcm.h)
 #include DeviceFamily_constructPath(driverlib/aon_ioc.h)
@@ -67,8 +68,8 @@
 #include DeviceFamily_constructPath(driverlib/cpu.h)
 #include DeviceFamily_constructPath(driverlib/vims.h)
 #include DeviceFamily_constructPath(driverlib/sys_ctrl.h)
-#include DeviceFamily_constructPath(driverlib/driverlib_release.h)
 #include DeviceFamily_constructPath(driverlib/setup.h)
+#include DeviceFamily_constructPath(driverlib/setup_rom.h)
 #include DeviceFamily_constructPath(driverlib/ccfgread.h)
 
 #include <zephyr/pm/policy.h>
@@ -82,11 +83,14 @@ static void emptyClockFunc(uintptr_t arg);
 static int_fast16_t notify(uint_fast16_t eventType);
 static void oscillatorISR(uintptr_t arg);
 static void switchToTCXO(void);
-static void delayUs(uint32_t us);
 static void hposcRtcCompensateFxn(int16_t currentTemperature,
                                   int16_t thresholdTemperature,
                                   uintptr_t clientArg,
                                   Temperature_NotifyObj *notifyObject);
+static void xosclfRtcCompensateFxn(int16_t currentTemperature,
+                                   int16_t thresholdTemperature,
+                                   uintptr_t clientArg,
+                                   Temperature_NotifyObj *notifyObject);
 
 /* RCOSC calibration functions functions */
 extern void PowerCC26X2_calibrate(void);
@@ -125,13 +129,9 @@ PowerCC26X2_ModuleState PowerCC26X2_module = {
     .enablePolicy     = false,        /* default value is false              */
     .initialized      = false,        /* whether Power_init has been called  */
     .constraintCounts = {0, 0, 0, 0, 0, 0, 0},
-    .resourceCounts = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-    .resourceHandlers = {
-      configureRFCoreClocks,
-      configureXOSCHF,
-      nopResourceHandler
-    },                              /* special resource handler functions */
-    .policyFxn = 0                  /* power policyFxn */
+    .resourceHandlers = {configureRFCoreClocks, configureXOSCHF, nopResourceHandler}, /* special resource handler
+                                                                                         functions */
+    .policyFxn        = 0,                                                            /* power policyFxn */
 };
 
 /*! Temperature notification to compensate the RTC when SCLK_LF is derived
@@ -139,6 +139,22 @@ PowerCC26X2_ModuleState PowerCC26X2_module = {
  */
 static Temperature_NotifyObj PowerCC26X2_hposcRtcCompNotifyObj = {0};
 
+/*! Temperature notification to compensate the RTC when SCLK_LF is derived
+ *  from XOSC_LF
+ */
+static Temperature_NotifyObj PowerCC26X2_xosclfRtcCompNotifyObj = {0};
+
+/*! Default RTC subsecond increment corresponding to precisely 32768 Hz
+ *  increment frequency
+ */
+#define RTC_SUBSECINC_32768_HZ 0x800000
+
+/*! This internal variable to the power-driver keeps track of the most recent
+ *  RTC increment value, whenever it is compensated due to temperature drift.
+ *  In case of a clock-switch from XOSC_LF to RCOSC_LF or vice versa, this
+ *  value is used to reprogram the RTC with a correct compensated value.
+ */
+static volatile uint32_t PowerCC26X2_rtcSubSecInc = RTC_SUBSECINC_32768_HZ;
 
 /* resource database */
 const PowerCC26XX_ResourceRecord resourceDB[PowerCC26X2_NUMRESOURCES] = {
@@ -147,7 +163,6 @@ const PowerCC26XX_ResourceRecord resourceDB[PowerCC26X2_NUMRESOURCES] = {
     {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_TIMER2}, /* PERIPH_GPT2 */
     {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_TIMER3}, /* PERIPH_GPT3 */
     {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_SERIAL, PRCM_PERIPH_SSI0},   /* PERIPH_SSI0 */
-    {PowerCC26XX_PERIPH  | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_SSI1},        /* PERIPH_SSI1 */
     {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_SERIAL, PRCM_PERIPH_UART0},  /* PERIPH_UART0 */
     {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_SERIAL, PRCM_PERIPH_I2C0},   /* PERIPH_I2C0 */
     {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_TRNG},   /* PERIPH_TRNG */
@@ -161,8 +176,19 @@ const PowerCC26XX_ResourceRecord resourceDB[PowerCC26X2_NUMRESOURCES] = {
     {PowerCC26XX_DOMAIN | PowerCC26XX_NOPARENT, PRCM_DOMAIN_SERIAL},      /* DOMAIN_SERIAL */
     {PowerCC26XX_DOMAIN | PowerCC26XX_NOPARENT, PRCM_DOMAIN_RFCORE},      /* DOMAIN_RFCORE */
     {PowerCC26XX_SPECIAL | PowerCC26XX_NOPARENT, 2},                      /* DOMAIN_SYSBUS */
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X2_CC26X2 || \
+     DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
     {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_PKA},   /* PERIPH_PKA */
     {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_UART1}, /* PERIPH_UART1 */
+    {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_SSI1},  /* PERIPH_SSI1 */
+#endif
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+    {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_UART2}, /* PERIPH_UART2 */
+    {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_UART3}, /* PERIPH_UART3 */
+    {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_SSI2},  /* PERIPH_SSI2 */
+    {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_SSI3},  /* PERIPH_SSI3 */
+    {PowerCC26XX_PERIPH | PowerCC26XX_DOMAIN_PERIPH, PRCM_PERIPH_I2C1},  /* PERIPH_I2C1 */
+#endif
 };
 
 /* Defines */
@@ -304,10 +330,10 @@ int_fast16_t Power_init(void)
          */
         ClockP_construct(&PowerCC26X2_module.tcxoEnableClock,
                          (ClockP_Fxn)&switchToTCXO,
-                         (CCFGRead_TCXO_MAX_START() * ClockP_getSystemTickFreq()) / 10000UL,
+                         (CCFGRead_TCXO_MAX_START() * 100) / ClockP_getSystemTickPeriod(),
                          NULL);
 
-        HWREG(AUX_DDI0_OSC_BASE + DDI_O_CLR + DDI_0_OSC_O_CTL0) = DDI_0_OSC_CTL0_XTAL_IS_24M;
+        PowerCC26X2_oscCtlClearXtal();
     }
 
     /* construct the Clock object for scheduling of wakeups */
@@ -336,17 +362,11 @@ int_fast16_t Power_init(void)
     clockParams.arg       = 0;
     ClockP_construct(&PowerCC26X2_module.calibrationClock, &PowerCC26X2_RCOSC_clockFunc, 8, &clockParams);
 
-    HwiP_construct(&PowerCC26X2_module.oscHwi,
-                    INT_OSC_COMB,
-                    oscillatorISR, NULL);
-    HWREG(PRCM_BASE + PRCM_O_OSCIMSC) = 0;
+    HwiP_construct(&PowerCC26X2_module.oscHwi, INT_OSC_COMB, oscillatorISR, NULL);
+    HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCIMSC) = 0;
 
     /* construct the TDC hwi */
-    HwiP_construct(&PowerCC26X2_module.tdcHwi,
-                   INT_AUX_COMB,
-                   PowerCC26X2_auxISR, NULL);
-
-    DRIVERLIB_ASSERT_CURR_RELEASE();
+    HwiP_construct(&PowerCC26X2_module.tdcHwi, INT_AUX_COMB, PowerCC26X2_auxISR, NULL);
 
     /* read the LF clock source from CCFG */
     ccfgLfClkSrc = CCFGRead_SCLK_LF_OPTION();
@@ -361,15 +381,20 @@ int_fast16_t Power_init(void)
         }
     }
 
-    /*
-     * if LF source is RCOSC_LF or XOSC_LF: assert DISALLOW_STANDBY constraint
-     * and start a timeout to check for activation
+    if (ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_RCOSC_LF || ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_XOSC_LF ||
+        ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_XOSC_HF_DLF)
+    {
+        /* Turn on oscillator interrupt for SCLK_LF switching.
+         * When using HPOSC-derived LF, the LF clock will already have switched
+         * and the interrupt will fire once interrupts are enabled
+         * again when the OS starts.
+         * When using a regular HF crystal to derive the LF source, it may take
+         * up to a few hundred microseconds for the crystal to start up.
+         * When using RCOSC_LF, the clock switch will happen very fast and
+         * the interrupt will often immediately trigger once interrupts are
+         * enabled again when the OS starts.
          */
-    if ((ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_RCOSC_LF) ||
-        (ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_XOSC_LF)) {
-
-        /* Turn on oscillator interrupt for SCLK_LF switching */
-        HWREG(PRCM_BASE + PRCM_O_OSCIMSC) |= PRCM_OSCIMSC_LFSRCDONEIM_M;
+        HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCIMSC) |= PRCM_OSCIMSC_LFSRCDONEIM_M;
 
         /* Disallow STANDBY pending LF clock quailifier disabling */
         Power_setConstraint(PowerCC26XX_DISALLOW_STANDBY);
@@ -381,33 +406,7 @@ int_fast16_t Power_init(void)
          */
 
         /* yes, disable the LF clock qualifiers */
-        DDI16BitfieldWrite(
-            AUX_DDI0_OSC_BASE,
-            DDI_0_OSC_O_CTL0,
-            DDI_0_OSC_CTL0_BYPASS_XOSC_LF_CLK_QUAL_M|
-                DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_M,
-            DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_S,
-            0x3);
-
-        /* enable clock loss detection */
-        OSCClockLossEventEnable();
-    }
-    else if(ccfgLfClkSrc == CCFGREAD_SCLK_LF_OPTION_XOSC_HF_DLF) {
-        /* else, user has requested LF to be derived from XOSC_HF */
-
-        /* Turn on oscillator interrupt for SCLK_LF switching.
-         * When using HPOSC, the LF clock will already have switched
-         * and the interrupt will fire once interrupts are enabled
-         * again when the OS starts.
-         * When using a regular HF crystal, it may take a little
-         * time for the crystal to start up
-         */
-        HWREG(PRCM_BASE + PRCM_O_OSCIMSC) |= PRCM_OSCIMSC_LFSRCDONEIM_M;
-
-        /* disallow standby since we cannot go into standby with
-         * an HF derived LF clock
-         */
-        Power_setConstraint(PowerCC26XX_DISALLOW_STANDBY);
+        PowerCC26X2_oscDisableQualifiers();
     }
 
     /* if VIMS RAM is configured as GPRAM: set retention constraint */
@@ -530,6 +529,20 @@ int_fast16_t Power_releaseDependency(uint_fast16_t resourceId)
         /* deactivate this resource ... */
         id = resourceDB[resourceId].driverlibID;
 
+/* Conditional compile required since CC26X1 does not define PRCM_PERIPH_PKA */
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+        /*
+         * Special handling for the Crypto, TRNG, PKA, and DMA peripherals
+         * which are on the secure side for CC26X3/X4.
+         */
+        if ((id == PRCM_PERIPH_CRYPTO) || (id == PRCM_PERIPH_TRNG) || (id == PRCM_PERIPH_PKA) ||
+            (id == PRCM_PERIPH_UDMA))
+        {
+            PowerCC26X2_releasePeriphDependency(id);
+        }
+        else
+        {
+#endif
             /* is resource a peripheral?... */
             if (resourceDB[resourceId].flags & PowerCC26XX_PERIPH)
             {
@@ -562,6 +575,9 @@ int_fast16_t Power_releaseDependency(uint_fast16_t resourceId)
             {
                 Power_releaseDependency(parent);
             }
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+        }
+#endif
     }
 
     /* re-enable interrupts */
@@ -645,6 +661,20 @@ int_fast16_t Power_setDependency(uint_fast16_t resourceId)
         /* now activate this resource ... */
         id = resourceDB[resourceId].driverlibID;
 
+/* Conditional compile required since CC26X1 does not define PRCM_PERIPH_PKA */
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
+        /*
+         * Special handling for the Crypto, TRNG, PKA, and DMA peripherals
+         * which are on the secure side for CC26X3/X4.
+         */
+        if ((id == PRCM_PERIPH_CRYPTO) || (id == PRCM_PERIPH_TRNG) || (id == PRCM_PERIPH_PKA) ||
+            (id == PRCM_PERIPH_UDMA))
+        {
+            PowerCC26X2_setPeriphDependency(id);
+        }
+        else
+        {
+#endif
             /* is resource a peripheral?... */
             if (resourceDB[resourceId].flags & PowerCC26XX_PERIPH)
             {
@@ -666,7 +696,9 @@ int_fast16_t Power_setDependency(uint_fast16_t resourceId)
                 PRCMPowerDomainOn(id);
                 while (PRCMPowerDomainsAllOn(id) != PRCM_DOMAIN_POWER_ON) {}
             }
+#if (DeviceFamily_PARENT == DeviceFamily_PARENT_CC13X4_CC26X3_CC26X4)
         }
+#endif
     }
 
     /* re-enable interrupts */
@@ -723,12 +755,12 @@ int_fast16_t Power_shutdown(uint_fast16_t shutdownState, uint_fast32_t shutdownT
         /* Ensure the JTAG domain is turned off
          * otherwise MCU domain can't be turned off.
          */
-        HWREG(AON_PMCTL_BASE + AON_PMCTL_O_JTAGCFG) = 0;
+        PowerCC26X2_pmctlDisableJtag();
 
         SysCtrlAonSync();
 
         /* now proceed with shutdown sequence ... */
-        SysCtrlShutdownWithAbort();
+        PowerCC26X2_sysctrlShutdownWithAbort();
     }
     else
     {
@@ -866,9 +898,7 @@ int_fast16_t Power_sleep(uint_fast16_t sleepState)
              *  - Turn off cache retention if requested
              *  - Invoke deep sleep to go to standby
              */
-            SysCtrlStandby(retainCache,
-                           VIMS_ON_CPU_ON_MODE,
-                           SYSCTRL_PREFERRED_RECHARGE_MODE);
+            PowerCC26X2_sysCtrlStandby(retainCache);
 
             /* 4. If didn't retain VIMS in standby, re-enable retention now */
             if (retainCache == false)
@@ -880,20 +910,20 @@ int_fast16_t Power_sleep(uint_fast16_t sleepState)
                 }
 
                 /* 5.2 Re-enable retention */
-                PRCMCacheRetentionEnable();
+                PowerCC26X2_prcmEnableCacheRetention();
             }
 
             /* 6. Start re-powering power domains */
             PRCMPowerDomainOn(poweredDomains);
 
             /* 7. Restore deep sleep clocks of Crypto and DMA */
-            if (Power_getDependencyCount(PowerCC26XX_PERIPH_CRYPTO)) {
-                PRCMPeripheralDeepSleepEnable(
-                    resourceDB[PowerCC26XX_PERIPH_CRYPTO].driverlibID);
+            if (Power_getDependencyCount(PowerCC26XX_PERIPH_CRYPTO))
+            {
+                PowerCC26X2_setPeriphDeepSleepEnable(resourceDB[PowerCC26XX_PERIPH_CRYPTO].driverlibID);
             }
-            if (Power_getDependencyCount(PowerCC26XX_PERIPH_UDMA)) {
-                PRCMPeripheralDeepSleepEnable(
-                    resourceDB[PowerCC26XX_PERIPH_UDMA].driverlibID);
+            if (Power_getDependencyCount(PowerCC26XX_PERIPH_UDMA))
+            {
+                PowerCC26X2_setPeriphDeepSleepEnable(resourceDB[PowerCC26XX_PERIPH_UDMA].driverlibID);
             }
 
             /* 8. Make sure clock settings take effect */
@@ -935,8 +965,9 @@ int_fast16_t Power_sleep(uint_fast16_t sleepState)
             /* For Zephyr, post suspend hooks need to run with interrupts
              * disabled after Power_sleep returns. So we need to leave
              * interrupts disabled.
-             */ 
+             */
             /* CPUcpsie(); */
+
 
             /*
              * 17. Signal all clients registered for late post-sleep
@@ -982,6 +1013,14 @@ void Power_unregisterNotify(Power_NotifyObj *pNotifyObj)
     HwiP_restore(key);
 }
 
+/*
+ *  ======== Power_reset ========
+ */
+void Power_reset(void)
+{
+    PowerCC26X2_sysCtrlReset();
+}
+
 /* ****************** CC26XX specific APIs ******************** */
 
 /*
@@ -994,7 +1033,8 @@ void PowerCC26X2_enableHposcRtcCompensation(void)
     /* If we are using HPOSC and SCLK_LF is derived from it, we need to
      * compensate the RTC to account for HPOSC frequency drift over temperature.
      */
-    if (OSC_IsHPOSCEnabledWithHfDerivedLfClock()) {
+    if (PowerCC26X2_oscIsHPOSCEnabledWithHfDerivedLfClock())
+    {
         Temperature_init();
 
         int16_t currentTemperature = Temperature_getTemperature();
@@ -1013,6 +1053,33 @@ void PowerCC26X2_enableHposcRtcCompensation(void)
     }
 }
 
+/*
+ *  ======== PowerCC26X2_enableXoscLfRtcCompensation ========
+ *  This function enables temperature based compensation of the RTC when
+ *  SCLK_LF is derived from XOSC_LF.
+ */
+void PowerCC26X2_enableXoscLfRtcCompensation(void)
+{
+    /* Check that SCLK_LF is derived from XOSC_LF */
+    if (CCFGRead_SCLK_LF_OPTION() == CCFGREAD_SCLK_LF_OPTION_XOSC_LF)
+    {
+        Temperature_init();
+
+        int16_t currentTemperature = Temperature_getTemperature();
+
+        /* This must be called before xosclfRtcCompensateFxn, as the compensation parameters must be initialised
+         * with respect to device-specifc temperature trim values.
+         */
+        OSC_LFXOSCInitStaticOffset();
+
+        /* The compensation fxn will register itself with updated thresholds
+         * based on the current temperature each time it is invoked. If we
+         * call it from the init function, it will register itself for the
+         * first time and handle initial RTC compensation.
+         */
+        xosclfRtcCompensateFxn(currentTemperature, 0, (uintptr_t)NULL, &PowerCC26X2_xosclfRtcCompNotifyObj);
+    }
+}
 
 /*
  *  ======== PowerCC26XX_calibrate ========
@@ -1102,8 +1169,9 @@ bool PowerCC26XX_isStableXOSC_HF(void)
     key = HwiP_disable();
 
     /* only query if HF source is ready if there is a pending change */
-    if (PowerCC26X2_module.xoscPending) {
-        ready = OSCHfSourceReady();
+    if (PowerCC26X2_module.xoscPending)
+    {
+        ready = PowerCC26X2_getOscHfSourceReady();
     }
 
     HwiP_restore(key);
@@ -1130,7 +1198,7 @@ void PowerCC26XX_switchXOSC_HF(void)
      * function, we can just switch without handling the case when the XOSC_HF
      * is not ready or PowerCC26X2_module.xoscPending is not true.
      */
-    OSCHF_AttemptToSwitchToXosc();
+    PowerCC26X2_oschfTrySwitchToXosc();
 
     /* Since configureXOSCHF() was called prior to this function to turn
      * on the XOSC_HF, PowerCC26X2_module.xoscPending will be true and
@@ -1158,12 +1226,21 @@ void PowerCC26XX_switchXOSC_HF(void)
     }
 }
 
+/*
+ *  ======== PowerCC26XX_getResetReason ========
+ *  Returns the root  for latest reset.
+ */
+PowerCC26X2_ResetReason PowerCC26X2_getResetReason(void)
+{
+    return PowerCC26X2_module.lastResetReason;
+}
+
 /* * * * * * * * * * * internal and support functions * * * * * * * * * * */
 
 /*
  *  ======== hposcRtcCompensateFxn ========
  */
-void hposcRtcCompensateFxn(int16_t currentTemperature,
+static void hposcRtcCompensateFxn(int16_t currentTemperature,
                                   int16_t thresholdTemperature,
                                   uintptr_t clientArg,
                                   Temperature_NotifyObj *notifyObject)
@@ -1182,8 +1259,47 @@ void hposcRtcCompensateFxn(int16_t currentTemperature,
                                              hposcRtcCompensateFxn,
                                              (uintptr_t)NULL);
 
-    if (status != Temperature_STATUS_SUCCESS) {
-        while(1);
+    if (status != Temperature_STATUS_SUCCESS)
+    {
+        while (1) {}
+    }
+}
+
+/*
+ *  ======== xosclfRtcCompensateFxn ========
+ */
+static void xosclfRtcCompensateFxn(int16_t currentTemperature,
+                                   int16_t thresholdTemperature,
+                                   uintptr_t clientArg,
+                                   Temperature_NotifyObj *notifyObject)
+{
+    int_fast16_t status;
+    int32_t xoscLfTemperatureOffset;
+    int32_t subsecIncCompensated;
+
+    /* Get PPM offset of crystal */
+    xoscLfTemperatureOffset = OSC_LFXOSCRelativeFrequencyOffsetGet(currentTemperature);
+
+    /* Calculate new subsecond increment, given offset value */
+    subsecIncCompensated = RTC_SUBSECINC_32768_HZ -
+                           (int32_t)((RTC_SUBSECINC_32768_HZ * (int64_t)xoscLfTemperatureOffset) / 1000000LL);
+
+    /* Update global RTC subsecond increment value, used by the Oscillator ISR when switching clocks */
+    PowerCC26X2_rtcSubSecInc = subsecIncCompensated;
+
+    /* Apply new RTC increment value */
+    PowerCC26X2_setSubSecIncToXoscLf(subsecIncCompensated);
+
+    /* Register the notification again with updated thresholds */
+    status = Temperature_registerNotifyRange(notifyObject,
+                                             currentTemperature + PowerCC26X2_XOSC_LF_RTC_COMPENSATION_DELTA,
+                                             currentTemperature - PowerCC26X2_XOSC_LF_RTC_COMPENSATION_DELTA,
+                                             xosclfRtcCompensateFxn,
+                                             (uintptr_t)NULL);
+
+    if (status != Temperature_STATUS_SUCCESS)
+    {
+        while (1) {}
     }
 }
 
@@ -1192,15 +1308,33 @@ void hposcRtcCompensateFxn(int16_t currentTemperature,
  */
 static void oscillatorISR(uintptr_t arg)
 {
-    uint32_t rawStatus = HWREG(PRCM_BASE + PRCM_O_OSCRIS);
-    uint32_t intStatusMask = HWREG(PRCM_BASE + PRCM_O_OSCIMSC);
+    uint32_t rawStatus     = HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCRIS);
+    uint32_t intStatusMask = HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCIMSC);
 
     /* Turn off mask for all flags we will handle */
-    HWREG(PRCM_BASE + PRCM_O_OSCIMSC) = intStatusMask & ~rawStatus;
+    HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCIMSC) = intStatusMask & ~rawStatus;
 
     /* XOSC_LF or RCOSC_LF qualified */
-    if (rawStatus & PRCM_OSCRIS_LFSRCDONERIS_M & intStatusMask) {
+    if (rawStatus & PRCM_OSCRIS_LFSRCDONERIS_M & intStatusMask)
+    {
+        /* Only switch SubSecInc for XOSC_LF.
+         * XOSC_HF_DLF and RCOSC_LF do not spend enough time waiting for the
+         * clock switch after enabling interrupts to accumulate any notable
+         * drift.
+         * External LF is just driven immediately and has no transition period.
+         */
+        if (CCFGRead_SCLK_LF_OPTION() == CCFGREAD_SCLK_LF_OPTION_XOSC_LF)
+        {
+            /* Set SubSecInc back to 32.768 kHz now that we have switched to
+             * the RCOSC_LF or XOSC_LF target clock.
+             */
+            PowerCC26X2_setSubSecIncToXoscLf(PowerCC26X2_rtcSubSecInc);
+        }
+
         disableLFClockQualifiers();
+
+        /* Call all registered callback functions waiting on LF clock switch */
+        notify(PowerCC26XX_SCLK_LF_SWITCHED);
     }
 
     /* XOSC_HF ready to switch to */
@@ -1220,7 +1354,7 @@ static void oscillatorISR(uintptr_t arg)
      * only masked out. XOSC_HF ready to switch can be cleared
      * after switching to XOSC_HF.
      */
-    HWREG(PRCM_BASE + PRCM_O_OSCICR) = intStatusMask & rawStatus;
+    HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCICR) = intStatusMask & rawStatus;
 }
 
 /*
@@ -1239,24 +1373,14 @@ static void disableLFClockQualifiers(void)
     uint32_t sourceLF;
 
     /* query LF clock source */
-    sourceLF = OSCClockSourceGet(OSC_SRC_CLK_LF);
+    sourceLF = PowerCC26X2_oscClockSourceGet(OSC_SRC_CLK_LF);
 
     /* is LF source either RCOSC_LF or XOSC_LF yet? */
     if ((sourceLF == OSC_RCOSC_LF) || (sourceLF == OSC_XOSC_LF))
     {
 
         /* yes, disable the LF clock qualifiers */
-        DDI16BitfieldWrite(
-            AUX_DDI0_OSC_BASE,
-            DDI_0_OSC_O_CTL0,
-            DDI_0_OSC_CTL0_BYPASS_XOSC_LF_CLK_QUAL_M|
-                DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_M,
-            DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_S,
-            0x3
-        );
-
-        /* enable clock loss detection */
-        OSCClockLossEventEnable();
+        PowerCC26X2_oscDisableQualifiers();
 
         /* now finish by releasing the standby disallow constraint */
         Power_releaseConstraint(PowerCC26XX_DISALLOW_STANDBY);
@@ -1264,17 +1388,7 @@ static void disableLFClockQualifiers(void)
     else if (sourceLF == OSC_XOSC_HF)
     {
         /* yes, disable the LF clock qualifiers */
-        DDI16BitfieldWrite(
-            AUX_DDI0_OSC_BASE,
-            DDI_0_OSC_O_CTL0,
-            DDI_0_OSC_CTL0_BYPASS_XOSC_LF_CLK_QUAL_M|
-                DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_M,
-            DDI_0_OSC_CTL0_BYPASS_RCOSC_LF_CLK_QUAL_S,
-            0x3
-        );
-
-        /* enable clock loss detection */
-        OSCClockLossEventEnable();
+        PowerCC26X2_oscDisableQualifiers();
 
         /* do not allow standby since the LF clock is HF derived */
     }
@@ -1369,13 +1483,18 @@ static void switchXOSCHF(void)
 
     key = HwiP_disable();
 
-    /* Switch to the XOSC_HF. Since this function is only called
-     * after we get an interrupt signifying it is ready to switch,
-     * it should always succeed.
-     * If it does not succeed, try again. It is fine if we spin,
-     * there is no sensible recovery mechanism from such an error.
+    /* Attempt to switch to XOSC_HF. The call will check whether the
+     * PENDINGSCLKHFSWITCHING bit is set before initiating the
+     * switch.
+     * - XOSC_HF xtal: This should succeed on first try since the OSC
+     *   interrupt is triggered only when the XOSC_HF is ready to switch.
+     * - XOSC_HF TCXO: At this point, the last stage of the clock qualification
+     *   initiated by setting XOSCHFCTL_BYPASS is still ongoing and
+     *   PENDINGSCLKHFSWITCHING is not set. It will take variable amount of
+     *   time, but at least 10us, before the XOSC_HF is ready to switch.
+     *   The loop ensures that we wait until it is ready.
      */
-    while (!OSCHF_AttemptToSwitchToXosc());
+    while (PowerCC26X2_oschfTrySwitchToXosc() == false) {}
 
     /* The only time we should get here is when PowerCC26X2_module.xoscPending == true
      * holds.
@@ -1411,31 +1530,18 @@ static unsigned int configureXOSCHF(unsigned int action)
      * action more than once will not have any effect until the hardware triggers
      * a software state change.
      */
-    if (action == PowerCC26XX_ENABLE &&
-        OSCClockSourceGet(OSC_SRC_CLK_HF) != OSC_XOSC_HF &&
-        PowerCC26X2_module.xoscPending == false) {
-
+    if (action == PowerCC26XX_ENABLE && PowerCC26X2_oscClockSourceGet(OSC_SRC_CLK_HF) != OSC_XOSC_HF &&
+        PowerCC26X2_module.xoscPending == false)
+    {
         /* Check if TCXO is selected in CCFG and in addition configured to be enabled
          * by the function pointed to by PowerCC26X2_config.enableTCXOFxn.
          */
-        if ((CCFGRead_XOSC_FREQ() == CCFGREAD_XOSC_FREQ_TCXO) &&
-            (PowerCC26X2_config.enableTCXOFxn != NULL)) {
+        if ((CCFGRead_XOSC_FREQ() == CCFGREAD_XOSC_FREQ_TCXO) && (PowerCC26X2_config.enableTCXOFxn != NULL))
+        {
 
-            /* Enable clock qualification on 48MHz signal from TCXO */
-            if (CCFGRead_TCXO_TYPE() == 0x1) {
-                /* If the selected TCXO type is clipped-sine, also enable
-                 * internal common-mode bias
-                 */
-                HWREG(AUX_DDI0_OSC_BASE + DDI_O_SET + DDI_0_OSC_O_XOSCHFCTL) = DDI_0_OSC_XOSCHFCTL_TCXO_MODE_XOSC_HF_EN |
-                                                                               DDI_0_OSC_XOSCHFCTL_TCXO_MODE;
-            }
-            else {
-                HWREG(AUX_DDI0_OSC_BASE + DDI_O_SET + DDI_0_OSC_O_XOSCHFCTL) = DDI_0_OSC_XOSCHFCTL_TCXO_MODE;
-            }
+            PowerCC26X2_enableTCXOQual();
 
-            /* Wait for ~10 us for common mode bias to stabilise and clock
-             * qual to take affect.
-             */
+            /* Wait for ~10 us for common mode bias to stabilise and clock qual to take effect. */
             delayUs(TCXO_RAMP_DELAY);
 
             /* Enable power on TCXO */
@@ -1453,24 +1559,24 @@ static unsigned int configureXOSCHF(unsigned int action)
              * before switching since we do not rely on the harware to
              * interrupt the system once the XOSC is stable.
              */
-            OSCHF_TurnOnXosc();
+            PowerCC26X2_turnOnXosc();
         }
 
         PowerCC26X2_module.xoscPending = true;
 
         /* Unless it is disallowed, unmask the XOSC_HF ready to switch flag */
-        if (!((CCFGRead_XOSC_FREQ() == CCFGREAD_XOSC_FREQ_TCXO) &&
-              (PowerCC26X2_config.enableTCXOFxn != NULL)))
+        if (!((CCFGRead_XOSC_FREQ() == CCFGREAD_XOSC_FREQ_TCXO) && (PowerCC26X2_config.enableTCXOFxn != NULL)))
+        {
+            if (!(Power_getConstraintMask() & (1 << PowerCC26XX_SWITCH_XOSC_HF_MANUALLY)))
             {
-            if (!(Power_getConstraintMask() & (1 << PowerCC26XX_SWITCH_XOSC_HF_MANUALLY))) {
 
                 /* Clearing the flag in the ISR does not always work. Clear it
                  * again just in case
                  * */
-                HWREG(PRCM_BASE + PRCM_O_OSCICR) = PRCM_OSCICR_HFSRCPENDC_M;
+                HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCICR) = PRCM_OSCICR_HFSRCPENDC_M;
 
                 /* Turn on oscillator interrupt for SCLK_HF switching */
-                HWREG(PRCM_BASE + PRCM_O_OSCIMSC) |= PRCM_OSCIMSC_HFSRCPENDIM_M;
+                HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCIMSC) |= PRCM_OSCIMSC_HFSRCPENDIM_M;
             }
         }
 
@@ -1484,8 +1590,9 @@ static unsigned int configureXOSCHF(unsigned int action)
     }
 
     /* when release XOSC_HF, auto switch to RCOSC_HF */
-    else if (action == PowerCC26XX_DISABLE) {
-        OSCHF_SwitchToRcOscTurnOffXosc();
+    else if (action == PowerCC26XX_DISABLE)
+    {
+        PowerCC26X2_oschfSwitchToRcosc();
 
         /* Handle TCXO if selected in CCFG */
         if ((CCFGRead_XOSC_FREQ() == CCFGREAD_XOSC_FREQ_TCXO) && (PowerCC26X2_config.enableTCXOFxn != NULL))
@@ -1496,25 +1603,7 @@ static unsigned int configureXOSCHF(unsigned int action)
              */
             ClockP_stop(ClockP_handle(&PowerCC26X2_module.tcxoEnableClock));
 
-            /* Disable clock qualification on 48MHz signal from TCXO and turn
-             * off TCXO bypass.
-             * If we do not disable clock qualificaition, it will not run the
-             * next time we switch to TCXO.
-             */
-            if (CCFGRead_TCXO_TYPE() == 1) {
-                /* Also turn off bias if clipped sine TCXO type. The bias
-                 * consumes a few hundred uA. That is fine while the TCXO is
-                 * running but we should not incur this penalty when not running
-                 * on TCXO.
-                 */
-                HWREG(AUX_DDI0_OSC_BASE + DDI_O_CLR + DDI_0_OSC_O_XOSCHFCTL) = DDI_0_OSC_XOSCHFCTL_TCXO_MODE |
-                                                                               DDI_0_OSC_XOSCHFCTL_BYPASS |
-                                                                               DDI_0_OSC_XOSCHFCTL_TCXO_MODE_XOSC_HF_EN;
-            }
-            else {
-                HWREG(AUX_DDI0_OSC_BASE + DDI_O_CLR + DDI_0_OSC_O_XOSCHFCTL) = DDI_0_OSC_XOSCHFCTL_TCXO_MODE |
-                                                                               DDI_0_OSC_XOSCHFCTL_BYPASS;
-            }
+            PowerCC26X2_disableTCXOQual();
 
             /* Check if function for enabling/disabling TCXO is supported */
             if (PowerCC26X2_config.enableTCXOFxn != NULL)
@@ -1533,11 +1622,11 @@ static unsigned int configureXOSCHF(unsigned int action)
         if (PowerCC26X2_module.xoscPending)
         {
             /* Remove HFSRCPEND from the OSC_COMB interrupt mask */
-            uint32_t oscMask = HWREG(PRCM_BASE + PRCM_O_OSCIMSC);
-            HWREG(PRCM_BASE + PRCM_O_OSCIMSC) = oscMask & ~ PRCM_OSCIMSC_HFSRCPENDIM_M;
+            uint32_t oscMask                                     = HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCIMSC);
+            HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCIMSC) = oscMask & ~PRCM_OSCIMSC_HFSRCPENDIM_M;
 
             /* Clear any residual trigger for HFSRCPEND */
-            HWREG(PRCM_BASE + PRCM_O_OSCICR) = PRCM_OSCICR_HFSRCPENDC;
+            HWREG(PRCM_BASE + NONSECURE_OFFSET + PRCM_O_OSCICR) = PRCM_OSCICR_HFSRCPENDC;
 
             Power_releaseConstraint(PowerCC26XX_DISALLOW_IDLE);
 
@@ -1553,16 +1642,12 @@ static unsigned int configureXOSCHF(unsigned int action)
  */
 static void switchToTCXO(void)
 {
-    /* Set bypass bit */
-    HWREG(AUX_DDI0_OSC_BASE + DDI_O_SET + DDI_0_OSC_O_XOSCHFCTL) = DDI_0_OSC_XOSCHFCTL_BYPASS;
-
     /* Request XOSC_HF. In this instance, that is the TCXO and it will
      * immediately be ready to switch to after requesting since we turned it on
      * earlier with a GPIO and waited for it to stabilise.
      */
-    OSCHF_TurnOnXosc();
+    PowerCC26X2_switchToTCXO();
 
     /* Switch to TCXO */
     switchXOSCHF();
 }
-
